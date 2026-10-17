@@ -1,8 +1,11 @@
 #!/bin/bash
 # The second half of the switch. steemd MUST BE STOPPED (it appends to the source log).
 #   1. adds the blocks that were written since convert_block_log.sh to the compressed log
-#   2. verifies the whole compressed log: every block links to the one before it, and its bytes are identical
-#      to the original's
+#   2. verifies the blocks that were just added (a few seconds - the node is down meanwhile). The rest of the
+#      compressed log should have been verified with convert's result before the node was stopped:
+#          compress_block_log verify --input NEWDIR/block_log --reference SRC/block_log --threads N
+#      (about an hour for the whole chain, it can run while the node is up). Set FULL_VERIFY=1 to verify
+#      everything here instead.
 #   3. does NOT replace anything - it prints the two mv commands to run, so the original is kept until you
 #      have started the node on the compressed log and watched it work.
 #
@@ -14,9 +17,12 @@ THREADS=${3:-4}
 
 if pgrep -x steemd >/dev/null; then echo "steemd is still running - stop it first"; exit 1; fi
 
+BEFORE=$(( $(stat -c %s "$DST/block_log.index") / 8 ))
 compress_block_log convert --input "$SRC" --output "$DST/block_log" --level 15 --threads "$THREADS" --include-last
 compress_block_log stats --input "$DST/block_log"
-compress_block_log verify --input "$DST/block_log" --reference "$SRC" --threads "$THREADS"
+if [ "${FULL_VERIFY:-0}" = "1" ]; then FROM=1; else FROM=$(( BEFORE > 1000 ? BEFORE - 1000 : 1 )); fi
+LAST=$(( $(stat -c %s "$DST/block_log.index") / 8 ))
+compress_block_log verify --input "$DST/block_log" --reference "$SRC" --from "$FROM" --to "$LAST" --threads "$THREADS"
 
 cat <<EOF
 
