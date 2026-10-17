@@ -74,11 +74,16 @@ struct source_log
       }
    }
 
-   // index values of blocks first..last+1 (the one after `last` tells where `last` ends)
+   // index values of blocks first..last, plus one more telling where `last` ends: the next block's value or, for the
+   // very last block of the log, the end of the file (its trailer then is the file's last 8 bytes). The end of
+   // the file is only a safe end of block while no steemd appends to the log.
    std::vector< uint64_t > values( uint64_t first, uint64_t last ) const
    {
+      FC_ASSERT( first >= 1 && last <= blocks, "block ${l} is not in the index", ("l", last) );
+      const bool at_end = last == blocks;
       std::vector< uint64_t > v( last - first + 2 );
-      pread_all( index_fd, v.data(), v.size() * sizeof( uint64_t ), ( first - 1 ) * sizeof( uint64_t ) );
+      pread_all( index_fd, v.data(), ( last - first + 1 + ( at_end ? 0 : 1 ) ) * sizeof( uint64_t ), ( first - 1 ) * sizeof( uint64_t ) );
+      if( at_end ) v.back() = size;
       return v;
    }
 };
@@ -135,7 +140,7 @@ int convert( const bpo::variables_map& o )
    dst.open( fc::path( o["output"].as< std::string >() ) );
    const uint64_t resume = dst.head_block_num() + 1;
    const uint64_t first = std::max< uint64_t >( resume, o.count( "from" ) ? o["from"].as< uint64_t >() : 1 );
-   uint64_t last = src.blocks - 1; // the last listed block is left for the final run
+   uint64_t last = src.blocks - 1; // the last listed block is left for the final run (--include-last)
    if( o.count( "to" ) ) last = std::min< uint64_t >( last, o["to"].as< uint64_t >() );
    if( o.count( "include-last" ) ) last = src.blocks;
    FC_ASSERT( first == resume, "The output ends at block ${h}; --from must be ${n}", ("h", dst.head_block_num())("n", resume) );
