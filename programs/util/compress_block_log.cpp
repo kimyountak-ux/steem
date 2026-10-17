@@ -3,6 +3,8 @@
 //   compress_block_log convert --input SRC/block_log --output DST/block_log --level 3 [--threads 8]
 //   compress_block_log verify  --input DST/block_log [--reference SRC/block_log]   (input: a log made by this tool)
 //   compress_block_log stats   --input DST/block_log
+//   compress_block_log train   --input SRC/block_log --from A --to B --out FILE.dict [--samples-mb 40] [--dict-size 220000]
+//   compress_block_log estimate --input SRC/block_log --from A --to B [--step 50] [--level 15] [--no-dictionary]
 //
 // The SOURCE is only ever read, with plain pread() calls on the block log and its index - it is never
 // opened by the block_log class, which could rewrite the index of a log that a running steemd is still
@@ -17,12 +19,19 @@
 
 #include <boost/program_options.hpp>
 
+#ifndef ZDICT_STATIC_LINKING_ONLY
+#  define ZDICT_STATIC_LINKING_ONLY
+#endif
+#include <zdict.h>
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <chrono>
+#include <random>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -306,6 +315,81 @@ int stats( const bpo::variables_map& o )
    return 0;
 }
 
+// Trains a zstd dictionary on blocks picked at random from [from, to] (read only).
+int train( const bpo::variables_map& o )
+{
+   source_log src( o["input"].as< std::string >() );
+   const uint64_t from = o["from"].as< uint64_t >();
+   const uint64_t to = std::min< uint64_t >( o["to"].as< uint64_t >(), src.blocks - 1 );
+   const size_t dict_size = o["dict-size"].as< size_t >();
+   const size_t budget = o["samples-mb"].as< size_t >() << 20;
+   FC_ASSERT( from >= 1 && from < to, "bad range" );
+
+   std::mt19937_64 rng( 12345 ); // fixed seed: the same range gives the same dictionary
+   std::vector< char > samples;
+   std::vector< size_t > sizes;
+   samples.reserve( budget + ( 1 << 20 ) );
+   while( samples.size() < budget )
+   {
+      const uint64_t n = from + rng() % ( to - from + 1 );
+      auto raw = source_raw( src, n );
+      samples.insert( samples.end(), raw.begin(), raw.end() );
+      sizes.push_back( raw.size() );
+   }
+   std::cerr << "training on " << sizes.size() << " blocks (" << ( samples.size() >> 20 ) << " MB) from " << from << " .. " << to << "\n";
+
+   std::vector< char > dict( dict_size );
+   ZDICT_fastCover_params_t params;
+   memset( &params, 0, sizeof( params ) );
+   params.nbThreads = std::max( 1, o["threads"].as< int >() );
+   params.splitPoint = 0.75;
+   params.accel = 1;
+   params.steps = 40;
+   params.zParams.compressionLevel = 3;
+   const size_t r = ZDICT_optimizeTrainFromBuffer_fastCover( dict.data(), dict.size(), samples.data(), sizes.data(),
+                                                             unsigned( sizes.size() ), &params );
+   FC_ASSERT( !ZDICT_isError( r ), "dictionary training failed: ${e}", ("e", ZDICT_getErrorName( r )) );
+   std::ofstream out( o["out"].as< std::string >(), std::ios::binary );
+   out.write( dict.data(), r );
+   std::cerr << "wrote " << r << " bytes (k=" << params.k << " d=" << params.d << ")\n";
+   return 0;
+}
+
+// How much the blocks of a range shrink with the current settings (every step-th block, nothing is written).
+int estimate( const bpo::variables_map& o )
+{
+   source_log src( o["input"].as< std::string >() );
+   const uint64_t from = o["from"].as< uint64_t >();
+   const uint64_t to = std::min< uint64_t >( o["to"].as< uint64_t >(), src.blocks - 1 );
+   const uint64_t step = std::max< uint64_t >( 1, o["step"].as< uint64_t >() );
+   const int level = o["level"].as< int >();
+   const bool use_dict = !o.count( "no-dictionary" );
+   uint64_t raw_bytes = 0, packed_bytes = 0, blocks = 0, stored_plain = 0;
+   std::vector< char > packed;
+   const auto t0 = std::chrono::steady_clock::now();
+   for( uint64_t n = from; n <= to; n += step )
+   {
+      auto raw = source_raw( src, n );
+      raw_bytes += raw.size();
+      fc::optional< uint8_t > dict;
+      if( use_dict ) dict = block_log_codec::dictionary_for_block( uint32_t( n ) );
+      if( block_log_codec::compress( raw.data(), raw.size(), level, dict, packed ) )
+         packed_bytes += packed.size();
+      else
+      {
+         packed_bytes += raw.size();
+         ++stored_plain;
+      }
+      ++blocks;
+   }
+   const double secs = std::chrono::duration< double >( std::chrono::steady_clock::now() - t0 ).count();
+   std::cout << from << " .. " << to << " every " << step << ": " << blocks << " blocks, "
+             << raw_bytes / blocks << " bytes each -> " << ( 100.0 * packed_bytes / raw_bytes ) << "% ("
+             << stored_plain << " kept plain) at level " << level << ( use_dict ? " with dictionaries" : "" )
+             << "   " << uint64_t( blocks / std::max( secs, 0.001 ) ) << " blocks/s\n";
+   return 0;
+}
+
 } // anonymous
 
 int main( int argc, char** argv )
@@ -328,7 +412,11 @@ int main( int argc, char** argv )
          ( "from", bpo::value< uint64_t >(), "first block" )
          ( "to", bpo::value< uint64_t >(), "last block" )
          ( "include-last", "convert: also convert the last block of the index (only when the node is stopped)" )
-         ( "reference", bpo::value< std::string >(), "verify: another block log whose blocks must be identical" );
+         ( "reference", bpo::value< std::string >(), "verify: another block log whose blocks must be identical" )
+         ( "out", bpo::value< std::string >(), "train: file for the dictionary" )
+         ( "samples-mb", bpo::value< size_t >()->default_value( 40 ), "train: megabytes of blocks to learn from" )
+         ( "dict-size", bpo::value< size_t >()->default_value( 220000 ), "train: size of the dictionary in bytes" )
+         ( "step", bpo::value< uint64_t >()->default_value( 50 ), "estimate: look at every step-th block" );
       bpo::variables_map vm;
       bpo::store( bpo::parse_command_line( argc - 1, argv + 1, od ), vm );
       bpo::notify( vm );
@@ -336,6 +424,8 @@ int main( int argc, char** argv )
       if( command == "convert" ) { FC_ASSERT( vm.count( "output" ), "--output is required" ); return convert( vm ); }
       if( command == "verify" )  return verify( vm );
       if( command == "stats" )   return stats( vm );
+      if( command == "train" )   { FC_ASSERT( vm.count( "out" ) && vm.count( "from" ) && vm.count( "to" ), "--out, --from and --to are required" ); return train( vm ); }
+      if( command == "estimate" ) { FC_ASSERT( vm.count( "from" ) && vm.count( "to" ), "--from and --to are required" ); return estimate( vm ); }
       std::cerr << "unknown command " << command << "\n";
       return 2;
    }
