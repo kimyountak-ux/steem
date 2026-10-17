@@ -272,7 +272,8 @@ uint32_t database::reindex( const open_args& args )
       with_write_lock( [&]()
       {
          _block_log.set_locking( false );
-         auto itr = _block_log.read_block( 0 );
+         // blocks are read by number: with compressed blocks the next one cannot be found from the end of this one
+         auto itr = std::make_pair( *_block_log.read_block_by_num( 1 ), uint64_t( 0 ) );
          auto last_block_num = _block_log.head()->block_num();
          if( args.stop_replay_at > 0 && args.stop_replay_at < last_block_num )
             last_block_num = args.stop_replay_at;
@@ -310,7 +311,7 @@ uint32_t database::reindex( const open_args& args )
 
             if( (args.benchmark.first > 0) && (cur_block_num % args.benchmark.first == 0) )
                args.benchmark.second( cur_block_num, get_abstract_index_cntr() );
-            itr = _block_log.read_block( itr.second );
+            itr.first = *_block_log.read_block_by_num( cur_block_num + 1 );
          }
 
          apply_block( itr.first, skip_flags );
@@ -511,7 +512,7 @@ void database::foreach_block(std::function<bool(const signed_block_header&, cons
    if(!_block_log.head())
       return;
 
-   auto itr = _block_log.read_block( 0 );
+   auto itr = std::make_pair( *_block_log.read_block_by_num( 1 ), uint64_t( 0 ) );
    auto last_block_num = _block_log.head()->block_num();
    signed_block_header previousBlockHeader = itr.first;
    while( itr.first.block_num() != last_block_num )
@@ -521,7 +522,7 @@ void database::foreach_block(std::function<bool(const signed_block_header&, cons
          return;
 
       previousBlockHeader = b;
-      itr = _block_log.read_block( itr.second );
+      itr.first = *_block_log.read_block_by_num( itr.first.block_num() + 1 );
    }
 
    processor(previousBlockHeader, itr.first);

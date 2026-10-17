@@ -1,3 +1,4 @@
+#include <steem/chain/block_log.hpp>
 #include <steem/chain/database_exceptions.hpp>
 
 #include <steem/plugins/chain/abstract_block_producer.hpp>
@@ -331,6 +332,10 @@ void chain_plugin::set_program_options(options_description& cli, options_descrip
          ("checkpoint,c", bpo::value<vector<string>>()->composing(), "Pairs of [BLOCK_NUM,BLOCK_ID] that should be enforced as checkpoints.")
          ("flush-state-interval", bpo::value<uint32_t>(),
             "flush shared memory changes to disk every N blocks")
+         ("block-log-compression", bpo::value<uint16_t>()->default_value(0),
+            "Store the blocks written to the block log zstd compressed at this level (1-22, 3 is a good choice). "
+            "0 (default) writes them uncompressed. Existing blocks stay as they are and both kinds are always readable. "
+            "A block log with compressed blocks cannot be read by a steemd that lacks this option.")
 #ifdef ENABLE_MIRA
          ("memory-replay-indices", bpo::value<vector<string>>()->multitoken()->composing(), "Specify which indices should be in memory during replay")
 #endif
@@ -379,6 +384,8 @@ void chain_plugin::plugin_initialize(const variables_map& options) {
    my->sps_remove_threshold = options.at( "sps-remove-threshold" ).as< uint16_t >();
 
    my->chainbase_flags |= options.at( "force-open" ).as< bool >() ? chainbase::skip_env_check : chainbase::skip_nothing;
+
+   steem::chain::block_log::set_write_compression_level( options.at( "block-log-compression" ).as<uint16_t>() );
 
    my->replay              = options.at( "replay-blockchain").as<bool>();
    my->resync              = options.at( "resync-blockchain").as<bool>();
