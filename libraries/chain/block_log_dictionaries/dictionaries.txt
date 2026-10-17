@@ -1,0 +1,9 @@
+# id  first_block  file      (ids are written into block logs for good: only ever ADD lines, with a new id and a higher first_block)
+0  1          dict0.bin
+1  12000000   dict1.bin
+2  20000000   dict2.bin
+3  30000000   dict3.bin
+4  45000000   dict4.bin
+5  60000000   dict5.bin
+6  75000000   dict6.bin
+7  95000000   dict7.bin

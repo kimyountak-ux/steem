@@ -38,10 +38,23 @@ add_library( steem_chain
              ${HEADERS}
            )
 
+# The built-in zstd dictionaries for the block log (block_log_dictionaries/*.bin) become a C++ table at build time.
+find_package( PythonInterp 3 REQUIRED )
+set( BLOCK_LOG_DICT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/block_log_dictionaries" )
+file( GLOB BLOCK_LOG_DICT_FILES "${BLOCK_LOG_DICT_DIR}/*.bin" )
+add_custom_command(
+   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/block_log_dictionary_data.inc"
+   COMMAND ${PYTHON_EXECUTABLE} "${CMAKE_SOURCE_DIR}/scripts/blocklog/make_dictionary_inc.py"
+           "${CMAKE_CURRENT_BINARY_DIR}/block_log_dictionary_data.inc" "${BLOCK_LOG_DICT_DIR}/dictionaries.txt"
+   DEPENDS ${BLOCK_LOG_DICT_FILES} "${BLOCK_LOG_DICT_DIR}/dictionaries.txt" "${CMAKE_SOURCE_DIR}/scripts/blocklog/make_dictionary_inc.py"
+   COMMENT "Generating the block log dictionary table" )
+set_source_files_properties( block_log_dictionaries.cpp PROPERTIES
+   OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/block_log_dictionary_data.inc" )
+
 target_link_libraries( steem_chain steem_jsonball steem_protocol fc chainbase steem_schema appbase mira zstd_static
                        ${PATCH_MERGE_LIB} )
 target_include_directories( steem_chain
-                            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
                             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include" )
 
 if( CLANG_TIDY_EXE )
