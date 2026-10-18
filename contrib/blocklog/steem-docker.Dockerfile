@@ -19,10 +19,10 @@ RUN apt-get update && \
 RUN pip3 install jinja2
 
 # Build arguments (--build-arg NAME=value). The source must be a branch or a tag.
-ARG steemd_version=blocklog-zstd
+ARG steemd_version=0.23.1-blocklog-zstd.1
 ENV steemd_version ${steemd_version}
 
-ARG STEEM_SOURCE="https://github.com/REPLACE-WITH-FORK/steem.git"
+ARG STEEM_SOURCE="https://github.com/kimyountak-ux/steem.git"
 ENV STEEM_SOURCE ${STEEM_SOURCE}
 
 ARG STEEM_STATIC_BUILD=ON

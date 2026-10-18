@@ -60,7 +60,8 @@ bits 0-47    position of the block in the file
 Build (the Dockerfile of steem-docker already takes the source as build arguments, so nothing else changes):
 
 ```
-docker build --build-arg STEEM_SOURCE=<url of this repository> --build-arg steemd_version=<branch or tag> -t steem-zstd dkr/
+docker build --build-arg STEEM_SOURCE=https://github.com/kimyountak-ux/steem.git \\
+             --build-arg steemd_version=0.23.1-blocklog-zstd.1 -t steem-zstd dkr/
 # or: docker build -f contrib/blocklog/steem-docker.Dockerfile -t steem-zstd .
 ```
 
